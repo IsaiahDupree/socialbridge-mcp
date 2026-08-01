@@ -1,0 +1,16 @@
+{
+  "name": "socialbridge-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remote MCP connector for SocialBridge API — unified social-media data across Instagram, TikTok, YouTube, Twitter/X, Reddit, Facebook, Pinterest, Snapchat, and Threads (profile / posts / search / comments per platform, plus cross-platform search, reddit history, the Meta Ad Library, youtube transcripts, threads post-by-code, and snapchat spotlight) exposed as MCP tools for Claude/ChatGPT/any MCP client. Every record returns one flat schema tagged with its platform.",
+  "type": "module",
+  "main": "api/mcp.js",
+  "scripts": {
+    "dev": "node local-server.js",
+    "smoke": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
