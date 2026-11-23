@@ -1,22 +1,30 @@
-# socialbridge-mcp
+# SocialBridge MCP
 
-A remote **MCP (Model Context Protocol)** connector for [SocialBridge API](https://social-api-olive.vercel.app) — unified social-media data behind one `/v1` contract across nine networks (Instagram, TikTok, YouTube, Twitter/X, Reddit, Facebook, Pinterest, Snapchat, Threads; LinkedIn is registered but quarantined). Every network exposes the same four operations — `profile`, `posts`, `search`, `comments` — returning one flat schema (`Profile` / `Post` / `Comment`) tagged with `platform`, plus a cross-platform superset (`search_all`) and a few platform-specific extras.
+A stateless streamable-HTTP MCP adapter for the existing SocialBridge API. It retains the ten existing tool names and input/output contracts. The adapter does not start a scheduler; a call can cause the API to use network services, including a paid proxy or third-party services.
 
-**Live:** `https://socialbridge-mcp.vercel.app/mcp` — 10 tools. Since the upstream SocialBridge deployment is metered (RapidAPI/Apify) and gates every `/v1/*` route behind a RapidAPI proxy-secret guard, this connector authenticates its own outbound calls with that same secret (`SOCIALBRIDGE_MCP_PROXY_SECRET`, sent as the `X-RapidAPI-Proxy-Secret` header) and applies a soft per-IP rate limit (`SOCIALBRIDGE_MCP_RATE_LIMIT`, default 30 tool-calls/hour, in-memory) so the free MCP tier stays a discovery channel rather than an unmetered bypass of the paid listing — see `lib/ratelimit.js`.
+## Spending and access defaults
 
-## What this is, and why it's a separate connector
+- Every MCP POST requires a bearer token in `SOCIALBRIDGE_MCP_CLIENT_TOKEN`. It must be at least 32 bytes. With no valid server token the endpoint returns 503; missing or incorrect caller tokens return 401. Health is an unauthenticated liveness/configuration endpoint and does not call the upstream.
+- No tools may execute by default. `SOCIALBRIDGE_MCP_ALLOWED_TOOLS` is a comma-separated list of the exact enabled tool names. Tool discovery remains available to authenticated clients; disabled calls return an MCP error without contacting the API.
+- `SOCIALBRIDGE_MCP_API_BASE_URL` must be configured. Only `http://127.0.0.1`, `http://localhost`, or `http://[::1]` (with an optional port), or HTTPS equivalents, are accepted by default. Remote upstreams require HTTPS and `SOCIALBRIDGE_MCP_ALLOW_REMOTE_UPSTREAM=1`. Redirects are refused. No cloud workload is authorized merely by these switches; enable a remote endpoint or tool only for the owner's explicitly authorized workload and expense.
+- `SOCIALBRIDGE_MCP_PROXY_SECRET` is forwarded only to the configured upstream as the upstream API's RapidAPI proxy header. The MCP caller token and this upstream credential are different secrets. Never put either in source control or logs.
+- The local development server binds to `127.0.0.1`. The existing in-memory rate limit remains best-effort per instance and is not a billing cap or a substitute for authentication.
 
-SocialBridge API is a plain REST API. Any HTTP client can already call it directly. This repo exists because **MCP clients (Claude, ChatGPT, and other MCP-aware agents) don't consume arbitrary REST APIs — they consume MCP tools.** `socialbridge-mcp` is a thin adapter layer that:
+A local upstream is not automatically free: SocialBridge API can call external social platforms or a configured paid proxy; `search_all` may fan out across several sources. Its own provider credentials and all downstream actions must be governed separately. This connector's configuration cannot limit direct API clients or guarantee a dollar cap. Existing public clients will need a token after this change; hosted deployment and its compatibility are not yet verified.
 
-- Exposes each SocialBridge endpoint as a discoverable, typed MCP **tool** (name, description, zod input schema, annotations) that an LLM can reason about and call directly.
-- Speaks the MCP **streamable-HTTP** transport at a single `/mcp` endpoint, so it registers as a connector in Claude, ChatGPT, or any other MCP client with one URL.
-- Does nothing else. Every tool call is a pass-through `fetch` to SocialBridge, and the JSON response is handed back verbatim as the tool result.
+## Configuration
 
-## Authentication: None on the MCP side (deliberate)
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SOCIALBRIDGE_MCP_CLIENT_TOKEN` | unset | Owner-provisioned bearer, at least 32 bytes |
+| `SOCIALBRIDGE_MCP_API_BASE_URL` | unset | Explicit SocialBridge API origin; loopback by default |
+| `SOCIALBRIDGE_MCP_ALLOWED_TOOLS` | unset | Comma-separated enabled tool names |
+| `SOCIALBRIDGE_MCP_ALLOW_REMOTE_UPSTREAM` | unset | `1` permits an HTTPS non-loopback upstream after separate authorization |
+| `SOCIALBRIDGE_MCP_PROXY_SECRET` | unset | Separate upstream proxy credential |
+| `SOCIALBRIDGE_MCP_RATE_LIMIT` | `30` | Best-effort tool calls per IP per hour per instance |
+| `PORT` | `3900` | Local loopback listener port |
 
-SocialBridge's data has no per-user dimension — it's public social-media metadata (profiles, posts, search results, comments). There is nothing to gate per-caller, so this connector ships with no OAuth, no login, no Supabase, no billing, no demo-vs-real split — every caller gets the same real, live data. `api/mcp.js` builds a fresh, stateless `McpServer` per request.
-
-> The connector still authenticates its own **outbound** calls to the metered upstream (see below) — that is a server-to-server detail invisible to MCP callers, not per-caller auth.
+Use a securely generated secret through the local environment or secret manager, never as a command-line argument. The live-lookup smoke test requires the token and `SMOKE_ALLOW_REAL_LOOKUP=1`; it makes a real upstream request and must only be run for an explicitly authorized workload. Run `SOCIAL_API_ROOT=/path/to/social-api npm run check:local` to start the actual local API with provider keys absent and verify its quarantined LinkedIn response without a remote lookup. The test uses random temporary credentials and stops its child processes.
 
 ## Tools
 
@@ -35,34 +43,6 @@ One tool per real SocialBridge `/v1` route (from `social-api/openapi.yaml` + `sr
 | `threads_post` | `GET /v1/threads/post` | A single thread by shortcode or URL, with replies. |
 | `snapchat_spotlight` | `GET /v1/snapchat/spotlight` | A creator's public Spotlight feed (unified `Post[]`). |
 
-`platform` is an enum of `instagram, tiktok, youtube, twitter, reddit, facebook, pinterest, snapchat, threads, linkedin`. Keyless platforms return real data with no setup; gated platforms return an honest `credentials_required` and LinkedIn returns `platform_disabled` — nothing is ever faked.
+`platform` is an enum of `instagram, tiktok, youtube, twitter, reddit, facebook, pinterest, snapchat, threads, linkedin`. After access and the individual tool are enabled, platform availability still depends on the upstream. Credential-gated platforms can return `credentials_required`; LinkedIn is quarantined and returns `platform_disabled` by default.
 
 All 10 tools are read-only and annotated `{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }`.
-
-## Environment variables
-
-| Var | Default | Purpose |
-|---|---|---|
-| `SOCIALBRIDGE_MCP_API_BASE_URL` | `https://social-api-olive.vercel.app` | Upstream SocialBridge base URL (override for local/self-hosted testing). |
-| `SOCIALBRIDGE_MCP_PROXY_SECRET` | _(unset)_ | RapidAPI proxy secret, sent outbound as `X-RapidAPI-Proxy-Secret` to pass the upstream `/v1/*` guard. Without it the upstream returns `403` and tools surface it honestly. |
-| `SOCIALBRIDGE_MCP_RATE_LIMIT` | `30` | Soft per-IP cap on `tools/call` per hour (in-memory, per serverless instance). |
-
-This is a **free discovery tier** over the metered SocialBridge API — heavy users should go through the paid RapidAPI/Apify listings.
-
-## How it wraps social-api
-
-Each tool handler does a plain `fetch(\`${SOCIALBRIDGE_MCP_API_BASE_URL}${path}\`, ...)` (with the `X-RapidAPI-Proxy-Secret` header when configured) against the real SocialBridge REST API and returns the parsed JSON as MCP tool-result content:
-
-```js
-{ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
-```
-
-Upstream HTTP errors (4xx/5xx) are caught and surfaced as a typed MCP error result via an `asError` helper rather than crashing the request.
-
-## Local development
-
-```bash
-npm install
-node local-server.js &                       # serves /mcp and /health on :3900
-SOCIALBRIDGE_MCP_PROXY_SECRET=... npm run smoke   # real end-to-end smoke test
-```

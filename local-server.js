@@ -57,9 +57,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`socialbridge-mcp local dev server listening on http://localhost:${PORT}`);
   console.log(`  MCP endpoint:    http://localhost:${PORT}/mcp`);
   console.log(`  Health endpoint: http://localhost:${PORT}/health`);
-  console.log(`  Upstream:        ${process.env.SOCIALBRIDGE_MCP_API_BASE_URL || 'https://social-api-olive.vercel.app'}`);
+  console.log(`  Upstream:        ${process.env.SOCIALBRIDGE_MCP_API_BASE_URL ? 'configured' : 'not configured'}`);
 });
